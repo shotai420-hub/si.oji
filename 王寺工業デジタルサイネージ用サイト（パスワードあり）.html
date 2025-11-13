@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>画像アップロード → フルスクリーンスライドショー（ハッシュ保護）</title>
+  <style>
+    :root{--bg:#0b0f14;--accent:#2dd4bf;--muted:#8b98a6}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans JP',sans-serif;background:var(--bg);color:#fff}
+    input[type=password]{padding:10px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;width:280px;text-align:center;font-size:1rem}
+    button{margin-top:12px;padding:8px 14px;border:none;border-radius:8px;background:var(--accent);color:#000;font-weight:bold;cursor:pointer}
+    .locked-screen{
+      display:flex;align-items:center;justify-content:center;flex-direction:column;
+      height:100vh;background:var(--bg);color:#fff;
+    }
+    #main-content{display:none}
+    .smallmsg{color:var(--muted);font-size:13px;margin-top:10px}
+    .app{max-width:1100px;margin:28px auto;padding:20px}
+    h1{margin:0 0 12px;font-size:1.4rem}
+    p.lead{color:var(--muted);margin:0 0 18px}
+    .uploader{display:flex;gap:12px;align-items:center}
+    .dropzone{flex:1;border:2px dashed rgba(255,255,255,0.08);padding:18px;border-radius:12px;min-height:84px;display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent)}
+    .dropzone.dragover{border-color:var(--accent);box-shadow:0 6px 20px rgba(0,0,0,0.5)}
+    .controls{display:flex;gap:8px}
+    input[type=file]{display:none}
+    .thumbs{display:flex;gap:8px;margin-top:12px;overflow:auto;padding-bottom:6px}
+    .thumb{width:96px;height:64px;object-fit:cover;border-radius:6px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.5)}
+    .slideshow{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,10,0.92);z-index:9999}
+    .slideshow.show{display:flex}
+    .slide{max-width:100%;max-height:100%;display:block;transform:translateX(0);transition:transform 420ms cubic-bezier(.2,.9,.25,1),opacity 420ms}
+    .slide.hide-left{transform:translateX(-30%);opacity:0}
+    .slide.hide-right{transform:translateX(30%);opacity:0}
+    .nav{position:fixed;top:50%;transform:translateY(-50%);display:flex;gap:12px;pointer-events:auto}
+    .nav.left{left:18px}
+    .nav.right{right:18px}
+    .nav button{background:rgba(255,255,255,0.06);border:none;color:#fff;font-size:22px;padding:12px;border-radius:999px}
+    .topbar{position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:center}
+    .topbar .info{font-size:14px;color:var(--muted)}
+    .thumbs-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;display:flex;gap:8px;padding:8px 10px;border-radius:12px;background:rgba(0,0,0,0.36);max-width:90%;overflow:auto}
+    .thumbs-bar img{width:72px;height:48px;object-fit:cover;border-radius:6px;opacity:0.8}
+    .thumbs-bar img.active{outline:3px solid var(--accent);opacity:1}
+    .small{font-size:13px;color:var(--muted)}
+    @media (max-width:600px){.thumb{width:72px;height:52px}.thumbs-bar img{width:56px;height:40px}}
+  </style>
+</head>
+<body>
+  <!-- ロック画面 -->
+  <div class="locked-screen" id="lock">
+    <h2>🔒 パスワードを入力してください</h2>
+    <input type="password" id="pwInput" placeholder="パスワード">
+    <div style="display:flex;gap:8px">
+      <button id="pwBtn">送信</button>
+      <button id="clearBtnPw">入力クリア</button>
+    </div>
+    <p id="msg" style="color:#f87171;margin-top:10px;display:none">パスワードが違います。</p>
+    <p class="smallmsg">※パスワードはソースに平文で書かれていません（SHA-256ハッシュで照合しています）。</p>
+  </div>
+
+  <!-- メインページ -->
+  <div id="main-content">
+    <div class="app">
+      <h1>画像アップロード → フルスクリーンスライドショー</h1>
+      <p class="lead">ここに画像をドラッグ＆ドロップするか、ファイル選択して下さい。アップロードした画像をその場でフルスクリーンのスライドショーで表示します。</p>
+
+      <div class="uploader">
+        <label class="dropzone" id="dropzone">
+          <strong>ここに画像をドロップ / クリックして選択</strong>
+          <div class="small">複数選択可 (.jpg .png .webp)</div>
+          <input id="fileInput" type="file" accept="image/*" multiple>
+        </label>
+
+        <div class="controls">
+          <button id="startBtn" disabled>スライドショー開始</button>
+          <button id="clearBtn" disabled>クリア</button>
+          <button id="autoplayToggle" disabled>自動再生: OFF</button>
+        </div>
+      </div>
+
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+
+    <!-- Fullscreen slideshow overlay -->
+    <div class="slideshow" id="slideshow" aria-hidden="true">
+      <div class="topbar" id="topbar" style="display:none">
+        <div class="info" id="slideInfo"></div>
+      </div>
+
+      <button class="nav left" id="prevBtn" title="前へ">◀</button>
+      <button class="nav right" id="nextBtn" title="次へ">▶</button>
+
+      <div id="slideContainer" style="max-width:100%;max-height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none"></div>
+
+      <div class="thumbs-bar" id="thumbsBar" style="display:none"></div>
+    </div>
+  </div>
+
+  <script>
+    // ====== パスワードハッシュ保護 ======
+    const PASSWORD_HASH = "28fa170f8d604e39091a96ef3dddd886872681c0dbbb830e37e44d1d39b40b7a";
+
+    async function sha256hex(str){
+      const enc = new TextEncoder();
+      const data = enc.encode(str);
+      const hash = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    }
+
+    const lock = document.getElementById("lock");
+    const main = document.getElementById("main-content");
+    const pwInput = document.getElementById("pwInput");
+    const pwBtn = document.getElementById("pwBtn");
+    const msg = document.getElementById("msg");
+    const clearBtnPw = document.getElementById("clearBtnPw");
+
+    async function checkPassword() {
+      msg.style.display = "none";
+      const v = pwInput.value.trim();
+      if(v === "") { msg.textContent="パスワードを入力してください。"; msg.style.display="block"; return; }
+      const h = await sha256hex(v);
+      if(h === PASSWORD_HASH){
+        lock.style.display = "none";
+        main.style.display = "block";
+        pwInput.value = "";
+      } else {
+        msg.textContent="パスワードが違います。";
+        msg.style.display="block";
+        pwInput.value = "";
+      }
+    }
+
+    pwBtn.addEventListener("click", checkPassword);
+    pwInput.addEventListener("keypress", e => { if(e.key==="Enter") checkPassword(); });
+    clearBtnPw.addEventListener("click", ()=>{ pwInput.value=""; msg.style.display="none"; });
+
+    // ====== ここからスライドショー本体 ======
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const thumbs = document.getElementById('thumbs');
+    const startBtn = document.getElementById('startBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const autoplayToggle = document.getElementById('autoplayToggle');
+    const slideshow = document.getElementById('slideshow');
+    const slideContainer = document.getElementById('slideContainer');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const thumbsBar = document.getElementById('thumbsBar');
+    const slideInfo = document.getElementById('slideInfo');
+
+    let images = []; let current = 0; let autoplay = false; let autointerval = null; const AUTOPLAY_MS = 3000;
+
+    function enableControls(state){ startBtn.disabled=!state; clearBtn.disabled=!state; autoplayToggle.disabled=!state; }
+    function handleFiles(fileList){ const files = Array.from(fileList).filter(f=>f.type.startsWith('image/')); if(!files.length) return; files.forEach(f=>{ const url=URL.createObjectURL(f); images.push({file:f,url,name:f.name}); }); renderThumbs(); enableControls(images.length>0);}
+    function renderThumbs(){ thumbs.innerHTML=''; thumbsBar.innerHTML=''; images.forEach((img,i)=>{ const t=document.createElement('img'); t.src=img.url; t.className='thumb'; t.title=img.name; t.addEventListener('click', ()=>{ openSlideshow(i); }); thumbs.appendChild(t); const tb=document.createElement('img'); tb.src=img.url; tb.title=img.name; tb.addEventListener('click',()=>{ goTo(i); }); thumbsBar.appendChild(tb); }); }
+
+    ['dragenter','dragover'].forEach(ev=>{ dropzone.addEventListener(ev,e=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.add('dragover'); }); });
+    ['dragleave','drop'].forEach(ev=>{ dropzone.addEventListener(ev,e=>{ e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('dragover'); }); });
+    dropzone.addEventListener('drop', e=>{ const dt=e.dataTransfer; if(!dt) return; handleFiles(dt.files); });
+    dropzone.addEventListener('click', ()=>fileInput.click());
+    fileInput.addEventListener('change', e=>handleFiles(e.target.files));
+
+    clearBtn.addEventListener('click', ()=>{ images.forEach(i=>URL.revokeObjectURL(i.url)); images=[]; renderThumbs(); enableControls(false); stopAutoplay(); });
+    startBtn.addEventListener('click', ()=>openSlideshow(0));
+
+    function openSlideshow(index){ if(!images.length) return; current=index||0; slideshow.classList.add('show'); slideshow.setAttribute('aria-hidden','false'); renderSlide(); thumbsBar.style.display='flex'; document.documentElement.requestFullscreen?.().catch(()=>{}); document.body.style.overflow='hidden'; attachListeners();}
+    function closeSlideshow(){ slideshow.classList.remove('show'); slideshow.setAttribute('aria-hidden','true'); stopAutoplay(); slideContainer.innerHTML=''; thumbsBar.style.display='none'; document.exitFullscreen?.().catch(()=>{}); document.body.style.overflow=''; detachListeners();}
+    function renderSlide(){ slideContainer.innerHTML=''; const img=document.createElement('img'); img.src=images[current].url; img.className='slide'; img.alt=images[current].name; slideContainer.appendChild(img); updateUI(); }
+    function updateUI(){ slideInfo.textContent=`${current+1} / ${images.length} — ${images[current].name}`; document.querySelectorAll('.thumbs-bar img').forEach((el,idx)=>{ el.classList.toggle('active', idx===current); }); }
+    function prev(){ current=(current-1+images.length)%images.length; renderSlide(); }
+    function next(){ current=(current+1)%images.length; renderSlide(); }
+    function goTo(i){ current=i; renderSlide(); }
+
+    prevBtn.addEventListener('click',prev);
+    nextBtn.addEventListener('click',next);
+
+    autoplayToggle.addEventListener('click',()=>{ autoplay=!autoplay; autoplayToggle.textContent=`自動再生: ${autoplay?'ON':'OFF'}`; if(autoplay) startAutoplay(); else stopAutoplay(); });
+    function startAutoplay(){ stopAutoplay(); autointerval=setInterval(()=>next(),AUTOPLAY_MS); }
+    function stopAutoplay(){ if(autointerval) clearInterval(autointerval); autointerval=null; }
+
+    function attachListeners(){
+      document.addEventListener('keydown',keyHandler);
+      slideshow.addEventListener('click',clickClose);
+      slideContainer.addEventListener('click',e=>e.stopPropagation());
+      let sx=null, sy=null;
+      slideContainer.addEventListener('touchstart', e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; }, {passive:true});
+      slideContainer.addEventListener('touchend', e=>{ if(sx===null) return; const t=e.changedTouches[0]; const dx=t.clientX-sx; const dy=t.clientY-sy; sx=null; sy=null; if(Math.abs(dx)>40 && Math.abs(dx)>Math.abs(dy)){ if(dx>0) prev(); else next(); } });
+    }
+    function detachListeners(){ document.removeEventListener('keydown',keyHandler); slideshow.removeEventListener('click',clickClose); }
+    function clickClose(e){ if(e.target===slideshow) closeSlideshow(); }
+    function keyHandler(e){ if(e.key==='ArrowLeft') prev(); if(e.key==='ArrowRight') next(); if(e.key==='Escape') closeSlideshow(); if(e.key===' '){ e.preventDefault(); autoplay=!autoplay; autoplayToggle.textContent=`自動再生: ${autoplay?'ON':'OFF'}`; if(autoplay) startAutoplay(); else stopAutoplay(); } }
+
+    thumbs.addEventListener('click', ()=>{ if(images.length) startBtn.disabled=false; });
+    slideshow.addEventListener('transitionend', ()=>{ document.getElementById('topbar').style.display='flex'; });
+
+    enableControls(false);
+  </script>
+</body>
+</html>
